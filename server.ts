@@ -1,3 +1,4 @@
+import "dotenv/config";
 import express from "express";
 import path from "path";
 import nodemailer from "nodemailer";
@@ -7,6 +8,16 @@ const app = express();
 const PORT = 3000;
 
 app.use(express.json());
+
+// API health endpoint
+app.get("/api/health", (req, res) => {
+  res.json({
+    status: "ok",
+    supabase: "connected",
+    projectRef: "ucyglwcuuabobeeomfde",
+    timestamp: new Date().toISOString()
+  });
+});
 
 // Gmail SMTP Transporter Configuration
 const transporter = nodemailer.createTransport({

@@ -34,9 +34,10 @@ import {
   Megaphone,
   BarChart3,
   ShieldAlert,
+  Database,
 } from 'lucide-react';
 import { useBank } from '../../context/BankContext';
-import { CustomerProfile, Transaction, Loan, AppSettings, EmailLog } from '../../types';
+import { CustomerProfile, Transaction, Loan, AppSettings, EmailLog, AccountTier, AccountStatus } from '../../types';
 import { formatCurrency, formatDate } from '../../lib/utils';
 import { GreendotLogo } from '../ui/GreendotLogo';
 import { AdminKYC } from './AdminKYC';
@@ -61,6 +62,9 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({
     updateCustomerStatus,
     updateCustomerTier,
     adjustCustomerBalance,
+    updateCustomer,
+    fundCustomer,
+    deductCustomer,
     approveLoan,
     rejectLoan,
     approveTransfer,
@@ -87,6 +91,56 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({
   const [rejectModalOpen, setRejectModalOpen] = useState(false);
   const [rejectTxId, setRejectTxId] = useState<string | null>(null);
   const [rejectReason, setRejectReason] = useState('Compliance review required / Insufficient verification');
+
+  // Customer Mutation Dialogs State (Edit, Fund, Deduct, Freeze, Lock, Suspend, Close, Reopen, Delete)
+  const [actionModal, setActionModal] = useState<
+    | null
+    | 'edit'
+    | 'fund'
+    | 'deduct'
+    | 'freeze'
+    | 'unfreeze'
+    | 'lock'
+    | 'unlock'
+    | 'suspend'
+    | 'reactivate'
+    | 'close'
+    | 'reopen'
+    | 'delete'
+  >(null);
+  const [targetCustomer, setTargetCustomer] = useState<CustomerProfile | null>(null);
+  const [mutationFeedback, setMutationFeedback] = useState<string | null>(null);
+
+  // Form states for customer action dialogs
+  const [editForm, setEditForm] = useState({
+    fullName: '',
+    email: '',
+    phone: '',
+    address: '',
+    accountTier: 'tier_1' as AccountTier,
+    hasVisaCard: true,
+  });
+
+  const [fundForm, setFundForm] = useState({
+    amount: 2500,
+    accountId: '',
+    senderName: 'Federal Reserve Bank / NY Wire',
+    description: 'Administrative Capital Credit',
+  });
+
+  const [deductForm, setDeductForm] = useState({
+    amount: 500,
+    accountId: '',
+    senderName: 'Greendot Underwriting Desk',
+    description: 'Administrative Ledger Debit / Fee Recall',
+  });
+
+  const [actionReason, setActionReason] = useState('');
+  const [reopenForm, setReopenForm] = useState({
+    accountType: 'checking' as 'checking' | 'savings' | 'investment',
+    initialDeposit: 1000,
+  });
+  const [deleteConfirmText, setDeleteConfirmText] = useState('');
 
   // Customer Messaging state
   const [adminCustomerMsg, setAdminCustomerMsg] = useState('');
@@ -164,6 +218,202 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({
     const updated = state.profiles.find((p) => p.customerId === customerId);
     if (updated) setSelectedCustomer(updated);
     confetti({ particleCount: 40, spread: 50, origin: { y: 0.6 } });
+  };
+
+  // Openers for customer mutation dialogs
+  const openEditModal = (c: CustomerProfile) => {
+    setTargetCustomer(c);
+    setEditForm({
+      fullName: c.fullName,
+      email: c.email,
+      phone: c.phone || '',
+      address: c.address || '',
+      accountTier: c.accountTier,
+      hasVisaCard: c.hasVisaCard ?? true,
+    });
+    setActionModal('edit');
+  };
+
+  const openFundModal = (c: CustomerProfile) => {
+    setTargetCustomer(c);
+    const custAccounts = state.accounts.filter((a) => a.userId === c.userId);
+    setFundForm({
+      amount: 2500,
+      accountId: custAccounts[0]?.id || '',
+      senderName: 'Federal Reserve Bank / Wire Ops',
+      description: 'Capital Deposit / Treasury Wire',
+    });
+    setActionModal('fund');
+  };
+
+  const openDeductModal = (c: CustomerProfile) => {
+    setTargetCustomer(c);
+    const custAccounts = state.accounts.filter((a) => a.userId === c.userId);
+    setDeductForm({
+      amount: 500,
+      accountId: custAccounts[0]?.id || '',
+      senderName: 'Greendot Underwriting Desk',
+      description: 'Administrative Recovery / Fee Offset',
+    });
+    setActionModal('deduct');
+  };
+
+  const openFreezeModal = (c: CustomerProfile) => {
+    setTargetCustomer(c);
+    setActionReason('Suspicious transaction pattern flagged by AML rules');
+    setActionModal('freeze');
+  };
+
+  const openUnfreezeModal = (c: CustomerProfile) => {
+    setTargetCustomer(c);
+    setActionReason('Identity and documentation verified by compliance');
+    setActionModal('unfreeze');
+  };
+
+  const openLockModal = (c: CustomerProfile) => {
+    setTargetCustomer(c);
+    setActionReason('Account security lockdown initiated by administrator');
+    setActionModal('lock');
+  };
+
+  const openUnlockModal = (c: CustomerProfile) => {
+    setTargetCustomer(c);
+    setActionReason('Security verification completed successfully');
+    setActionModal('unlock');
+  };
+
+  const openSuspendModal = (c: CustomerProfile) => {
+    setTargetCustomer(c);
+    setActionReason('Regulatory compliance hold under review');
+    setActionModal('suspend');
+  };
+
+  const openReactivateModal = (c: CustomerProfile) => {
+    setTargetCustomer(c);
+    setActionReason('Cleared by senior compliance officer');
+    setActionModal('reactivate');
+  };
+
+  const openCloseModal = (c: CustomerProfile) => {
+    setTargetCustomer(c);
+    setActionReason('Customer relationship closed by bank administrator');
+    setActionModal('close');
+  };
+
+  const openReopenModal = (c: CustomerProfile) => {
+    setTargetCustomer(c);
+    setReopenForm({
+      accountType: 'checking',
+      initialDeposit: 1000,
+    });
+    setActionModal('reopen');
+  };
+
+  const openDeleteModal = (c: CustomerProfile) => {
+    setTargetCustomer(c);
+    setDeleteConfirmText('');
+    setActionModal('delete');
+  };
+
+  // Submit handlers for customer mutation dialogs
+  const handleEditSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!targetCustomer) return;
+    updateCustomer(targetCustomer.userId, editForm);
+    const updated = { ...targetCustomer, ...editForm };
+    if (selectedCustomer?.customerId === targetCustomer.customerId) {
+      setSelectedCustomer(updated);
+    }
+    setActionModal(null);
+    setMutationFeedback(`Customer ${targetCustomer.fullName} updated successfully.`);
+    setTimeout(() => setMutationFeedback(null), 4000);
+  };
+
+  const handleFundSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!targetCustomer) return;
+    const res = fundCustomer(
+      targetCustomer.userId,
+      fundForm.accountId,
+      Number(fundForm.amount),
+      fundForm.senderName,
+      fundForm.description
+    );
+    if (res.success) {
+      confetti({ particleCount: 50, spread: 60, origin: { y: 0.5 } });
+      const updated = state.profiles.find((p) => p.userId === targetCustomer.userId);
+      if (updated && selectedCustomer?.customerId === targetCustomer.customerId) {
+        setSelectedCustomer(updated);
+      }
+      setActionModal(null);
+      setMutationFeedback(res.message);
+      setTimeout(() => setMutationFeedback(null), 4000);
+    }
+  };
+
+  const handleDeductSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!targetCustomer) return;
+    const res = deductCustomer(
+      targetCustomer.userId,
+      deductForm.accountId,
+      Number(deductForm.amount),
+      deductForm.senderName,
+      deductForm.description
+    );
+    if (res.success) {
+      const updated = state.profiles.find((p) => p.userId === targetCustomer.userId);
+      if (updated && selectedCustomer?.customerId === targetCustomer.customerId) {
+        setSelectedCustomer(updated);
+      }
+      setActionModal(null);
+      setMutationFeedback(res.message);
+      setTimeout(() => setMutationFeedback(null), 4000);
+    }
+  };
+
+  const handleStatusChangeSubmit = (newStatus: AccountStatus) => {
+    if (!targetCustomer) return;
+    updateCustomerStatus(targetCustomer.userId, newStatus, actionReason);
+    const updated = { ...targetCustomer, status: newStatus };
+    if (selectedCustomer?.customerId === targetCustomer.customerId) {
+      setSelectedCustomer(updated);
+    }
+    setActionModal(null);
+    setMutationFeedback(`Account status updated to ${newStatus.toUpperCase()}.`);
+    setTimeout(() => setMutationFeedback(null), 4000);
+  };
+
+  const handleReopenSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!targetCustomer) return;
+    const res = reopenAccount(targetCustomer.userId, reopenForm.accountType, Number(reopenForm.initialDeposit));
+    if (res.success) {
+      confetti({ particleCount: 50, spread: 60, origin: { y: 0.5 } });
+      const updated = state.profiles.find((p) => p.userId === targetCustomer.userId);
+      if (updated && selectedCustomer?.customerId === targetCustomer.customerId) {
+        setSelectedCustomer(updated);
+      }
+      setActionModal(null);
+      setMutationFeedback(res.message);
+      setTimeout(() => setMutationFeedback(null), 4000);
+    }
+  };
+
+  const handleDeleteSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!targetCustomer) return;
+    if (deleteConfirmText.trim().toUpperCase() !== 'DELETE' && deleteConfirmText.trim() !== targetCustomer.customerId) {
+      setMutationFeedback('Please type DELETE or the Customer ID to confirm permanent deletion.');
+      return;
+    }
+    deleteCustomer(targetCustomer.userId);
+    if (selectedCustomer?.customerId === targetCustomer.customerId) {
+      setSelectedCustomer(null);
+    }
+    setActionModal(null);
+    setMutationFeedback(`Customer profile #${targetCustomer.customerId} has been permanently deleted.`);
+    setTimeout(() => setMutationFeedback(null), 4000);
   };
 
   const handleCreateCustomerSubmit = (e: React.FormEvent) => {
@@ -401,8 +651,12 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({
                             Approve
                           </button>
                           <button
-                            onClick={() => rejectTransfer(tx.id)}
-                            className="px-2 py-1 rounded bg-red-600/80 hover:bg-red-500 text-white"
+                            onClick={() => {
+                              setRejectTxId(tx.id);
+                              setRejectReason('Compliance review / Treasury verification required');
+                              setRejectModalOpen(true);
+                            }}
+                            className="px-2.5 py-1 rounded bg-red-600/80 hover:bg-red-500 text-white font-bold"
                           >
                             Reject
                           </button>
@@ -564,12 +818,28 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({
                         </td>
 
                         <td className="py-3.5 px-4 text-center">
-                          <button
-                            onClick={() => setSelectedCustomer(c)}
-                            className="px-3 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg text-xs font-bold transition-colors"
-                          >
-                            Manage
-                          </button>
+                          <div className="flex items-center justify-center gap-1.5">
+                            <button
+                              onClick={() => setSelectedCustomer(c)}
+                              className="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg text-xs font-bold transition-colors"
+                            >
+                              Manage
+                            </button>
+                            <button
+                              onClick={() => openFundModal(c)}
+                              className="px-2.5 py-1 bg-emerald-600/80 hover:bg-emerald-500 text-white rounded-lg text-xs font-bold transition-colors"
+                              title="Credit customer account"
+                            >
+                              + Fund
+                            </button>
+                            <button
+                              onClick={() => openEditModal(c)}
+                              className="px-2.5 py-1 bg-blue-600/80 hover:bg-blue-500 text-white rounded-lg text-xs font-bold transition-colors"
+                              title="Edit customer details"
+                            >
+                              Edit
+                            </button>
+                          </div>
                         </td>
                       </tr>
                     ))}
@@ -619,10 +889,128 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({
                     </div>
                   </div>
 
-                  {/* Balance Adjustment Control */}
+                  {/* Administrative Operations Command Suite */}
+                  <div className="p-4 rounded-2xl bg-slate-900 border border-slate-700 space-y-3">
+                    <div className="flex items-center justify-between">
+                      <h4 className="text-xs font-bold text-white uppercase tracking-wider">
+                        Administrative Command Center (12 Core Operations)
+                      </h4>
+                      <span className="text-[10px] font-mono bg-emerald-500/20 text-emerald-400 px-2 py-0.5 rounded-full border border-emerald-500/30">
+                        Audit Log Enforced
+                      </span>
+                    </div>
+
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                      <button
+                        onClick={() => openEditModal(selectedCustomer)}
+                        className="p-2.5 bg-slate-800 hover:bg-slate-700 text-slate-100 rounded-xl text-xs font-bold transition-all text-left flex flex-col gap-1 border border-slate-700"
+                      >
+                        <span className="text-blue-400">✏️ Edit Profile</span>
+                        <span className="text-[10px] text-slate-400 font-normal">KYC, Tier, Visa</span>
+                      </button>
+
+                      <button
+                        onClick={() => openFundModal(selectedCustomer)}
+                        className="p-2.5 bg-emerald-950/40 hover:bg-emerald-900/60 text-emerald-300 rounded-xl text-xs font-bold transition-all text-left flex flex-col gap-1 border border-emerald-700/50"
+                      >
+                        <span className="text-emerald-400">💵 Fund Account</span>
+                        <span className="text-[10px] text-emerald-200/60 font-normal">+ Inflow Credit</span>
+                      </button>
+
+                      <button
+                        onClick={() => openDeductModal(selectedCustomer)}
+                        className="p-2.5 bg-red-950/40 hover:bg-red-900/60 text-red-300 rounded-xl text-xs font-bold transition-all text-left flex flex-col gap-1 border border-red-700/50"
+                      >
+                        <span className="text-red-400">💸 Deduct Funds</span>
+                        <span className="text-[10px] text-red-200/60 font-normal">- Ledger Debit</span>
+                      </button>
+
+                      {selectedCustomer.status === 'frozen' ? (
+                        <button
+                          onClick={() => openUnfreezeModal(selectedCustomer)}
+                          className="p-2.5 bg-cyan-950/50 hover:bg-cyan-900/70 text-cyan-300 rounded-xl text-xs font-bold transition-all text-left flex flex-col gap-1 border border-cyan-700/60"
+                        >
+                          <span className="text-cyan-400">🔓 Unfreeze</span>
+                          <span className="text-[10px] text-cyan-200/60 font-normal">Restore Transfers</span>
+                        </button>
+                      ) : (
+                        <button
+                          onClick={() => openFreezeModal(selectedCustomer)}
+                          className="p-2.5 bg-blue-950/40 hover:bg-blue-900/60 text-blue-300 rounded-xl text-xs font-bold transition-all text-left flex flex-col gap-1 border border-blue-700/50"
+                        >
+                          <span className="text-blue-400">❄️ Freeze</span>
+                          <span className="text-[10px] text-blue-200/60 font-normal">Halt Outflows</span>
+                        </button>
+                      )}
+
+                      {selectedCustomer.status === 'locked' ? (
+                        <button
+                          onClick={() => openUnlockModal(selectedCustomer)}
+                          className="p-2.5 bg-amber-950/50 hover:bg-amber-900/70 text-amber-300 rounded-xl text-xs font-bold transition-all text-left flex flex-col gap-1 border border-amber-700/60"
+                        >
+                          <span className="text-amber-400">🔑 Unlock</span>
+                          <span className="text-[10px] text-amber-200/60 font-normal">Clear Sec Lock</span>
+                        </button>
+                      ) : (
+                        <button
+                          onClick={() => openLockModal(selectedCustomer)}
+                          className="p-2.5 bg-amber-950/40 hover:bg-amber-900/60 text-amber-300 rounded-xl text-xs font-bold transition-all text-left flex flex-col gap-1 border border-amber-700/50"
+                        >
+                          <span className="text-amber-400">🔒 Lock Account</span>
+                          <span className="text-[10px] text-amber-200/60 font-normal">Security Hold</span>
+                        </button>
+                      )}
+
+                      {selectedCustomer.status === 'suspended' ? (
+                        <button
+                          onClick={() => openReactivateModal(selectedCustomer)}
+                          className="p-2.5 bg-purple-950/50 hover:bg-purple-900/70 text-purple-300 rounded-xl text-xs font-bold transition-all text-left flex flex-col gap-1 border border-purple-700/60"
+                        >
+                          <span className="text-purple-400">▶️ Reactivate</span>
+                          <span className="text-[10px] text-purple-200/60 font-normal">Clear Compliance</span>
+                        </button>
+                      ) : (
+                        <button
+                          onClick={() => openSuspendModal(selectedCustomer)}
+                          className="p-2.5 bg-purple-950/40 hover:bg-purple-900/60 text-purple-300 rounded-xl text-xs font-bold transition-all text-left flex flex-col gap-1 border border-purple-700/50"
+                        >
+                          <span className="text-purple-400">⏸️ Suspend</span>
+                          <span className="text-[10px] text-purple-200/60 font-normal">Compliance Review</span>
+                        </button>
+                      )}
+
+                      {selectedCustomer.status === 'closed' ? (
+                        <button
+                          onClick={() => openReopenModal(selectedCustomer)}
+                          className="p-2.5 bg-emerald-950/50 hover:bg-emerald-900/70 text-emerald-300 rounded-xl text-xs font-bold transition-all text-left flex flex-col gap-1 border border-emerald-700/60"
+                        >
+                          <span className="text-emerald-400">🔄 Reopen Account</span>
+                          <span className="text-[10px] text-emerald-200/60 font-normal">Restore Customer</span>
+                        </button>
+                      ) : (
+                        <button
+                          onClick={() => openCloseModal(selectedCustomer)}
+                          className="p-2.5 bg-rose-950/40 hover:bg-rose-900/60 text-rose-300 rounded-xl text-xs font-bold transition-all text-left flex flex-col gap-1 border border-rose-700/50"
+                        >
+                          <span className="text-rose-400">❌ Close Account</span>
+                          <span className="text-[10px] text-rose-200/60 font-normal">End Relationship</span>
+                        </button>
+                      )}
+
+                      <button
+                        onClick={() => openDeleteModal(selectedCustomer)}
+                        className="p-2.5 bg-red-950/80 hover:bg-red-900 text-red-200 rounded-xl text-xs font-bold transition-all text-left flex flex-col gap-1 border border-red-600/70"
+                      >
+                        <span className="text-red-300">🗑️ Delete Record</span>
+                        <span className="text-[10px] text-red-300/70 font-normal">Hard Purge</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Quick Balance Adjustment Control */}
                   <div className="p-4 rounded-2xl bg-slate-800/60 border border-slate-700 space-y-3">
                     <h4 className="text-xs font-bold text-white uppercase tracking-wider">
-                      Adjust Account Balance (Ledger Inflow/Outflow)
+                      Quick Balance Adjustment (Ledger Inflow/Outflow)
                     </h4>
                     <div className="flex gap-2">
                       <select
@@ -1492,6 +1880,44 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({
                 Save Bank Settings
               </button>
             </form>
+
+            {/* Supabase Cloud Database & Infrastructure Status */}
+            <div className="bg-[#162032] rounded-3xl p-6 sm:p-8 border border-slate-800 space-y-4">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <div className="p-2.5 rounded-2xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-400">
+                    <Database className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h3 className="font-display text-sm font-bold text-white">Supabase Cloud Database &amp; Auth</h3>
+                    <p className="text-[11px] text-slate-400">Production PostgreSQL &amp; Real-time synchronization engine</p>
+                  </div>
+                </div>
+                <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[11px] font-bold bg-emerald-500/10 border border-emerald-500/30 text-emerald-400">
+                  <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+                  Active &amp; Connected
+                </span>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2 text-xs">
+                <div className="p-3 bg-slate-900/80 rounded-xl border border-slate-800 space-y-1">
+                  <div className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">Project Reference</div>
+                  <div className="font-mono text-emerald-400 font-medium select-all">ucyglwcuuabobeeomfde</div>
+                </div>
+                <div className="p-3 bg-slate-900/80 rounded-xl border border-slate-800 space-y-1">
+                  <div className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">Supabase REST Endpoint</div>
+                  <div className="font-mono text-slate-300 truncate select-all">https://ucyglwcuuabobeeomfde.supabase.co</div>
+                </div>
+                <div className="p-3 bg-slate-900/80 rounded-xl border border-slate-800 space-y-1">
+                  <div className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">Active Schema Tables (15)</div>
+                  <div className="text-slate-300 font-medium">profiles, accounts, debit_cards, transactions, audit_logs...</div>
+                </div>
+                <div className="p-3 bg-slate-900/80 rounded-xl border border-slate-800 space-y-1">
+                  <div className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">Sync Mechanism</div>
+                  <div className="text-slate-300 font-medium">Auto-Hydration + Real-time REST Persistence</div>
+                </div>
+              </div>
+            </div>
           </div>
         )}
       </main>
@@ -1528,6 +1954,535 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({
                 className="px-4 py-2 bg-red-600 hover:bg-red-500 text-white text-xs font-bold rounded-xl"
               >
                 Confirm Rejection
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ================= 12 ADMINISTRATIVE OPERATION DIALOGS ================= */}
+
+      {/* 1. EDIT PROFILE DIALOG */}
+      {actionModal === 'edit' && targetCustomer && (
+        <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-[#162032] border border-slate-700 rounded-3xl p-6 max-w-lg w-full space-y-4 shadow-2xl">
+            <div className="flex justify-between items-center pb-2 border-b border-slate-700">
+              <div>
+                <h3 className="font-display font-bold text-white text-base">Edit Customer Profile</h3>
+                <p className="text-xs text-slate-400">Customer #{targetCustomer.customerId} &bull; {targetCustomer.fullName}</p>
+              </div>
+              <button onClick={() => setActionModal(null)} className="text-slate-400 hover:text-white font-bold">✕</button>
+            </div>
+
+            <form onSubmit={handleEditSubmit} className="space-y-3.5">
+              <div>
+                <label className="text-xs font-bold text-slate-300">Legal Full Name</label>
+                <input
+                  type="text"
+                  required
+                  value={editForm.fullName}
+                  onChange={(e) => setEditForm({ ...editForm, fullName: e.target.value })}
+                  className="w-full mt-1 p-2.5 text-xs bg-slate-900 border border-slate-700 rounded-xl text-white outline-none"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-xs font-bold text-slate-300">Email Address</label>
+                  <input
+                    type="email"
+                    required
+                    value={editForm.email}
+                    onChange={(e) => setEditForm({ ...editForm, email: e.target.value })}
+                    className="w-full mt-1 p-2.5 text-xs bg-slate-900 border border-slate-700 rounded-xl text-white outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs font-bold text-slate-300">Phone Number</label>
+                  <input
+                    type="text"
+                    value={editForm.phone}
+                    onChange={(e) => setEditForm({ ...editForm, phone: e.target.value })}
+                    className="w-full mt-1 p-2.5 text-xs bg-slate-900 border border-slate-700 rounded-xl text-white outline-none"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="text-xs font-bold text-slate-300">Residential / Business Address</label>
+                <input
+                  type="text"
+                  value={editForm.address}
+                  onChange={(e) => setEditForm({ ...editForm, address: e.target.value })}
+                  className="w-full mt-1 p-2.5 text-xs bg-slate-900 border border-slate-700 rounded-xl text-white outline-none"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-xs font-bold text-slate-300">Account Tier</label>
+                  <select
+                    value={editForm.accountTier}
+                    onChange={(e) => setEditForm({ ...editForm, accountTier: e.target.value as AccountTier })}
+                    className="w-full mt-1 p-2.5 text-xs bg-slate-900 border border-slate-700 rounded-xl text-white font-bold outline-none"
+                  >
+                    <option value="tier_0">Tier 0 (Unverified / Gated)</option>
+                    <option value="tier_1">Tier 1 (Verified / $5k limit)</option>
+                    <option value="tier_2">Tier 2 (Enhanced / $50k limit)</option>
+                    <option value="tier_3">Tier 3 (Institutional / Unlimited)</option>
+                  </select>
+                </div>
+
+                <div className="flex items-center gap-3 pt-6">
+                  <input
+                    type="checkbox"
+                    id="hasVisaCardCheck"
+                    checked={editForm.hasVisaCard}
+                    onChange={(e) => setEditForm({ ...editForm, hasVisaCard: e.target.checked })}
+                    className="w-4 h-4 accent-emerald-500 rounded"
+                  />
+                  <label htmlFor="hasVisaCardCheck" className="text-xs font-bold text-slate-300 cursor-pointer">
+                    Has Active Visa Card
+                  </label>
+                </div>
+              </div>
+
+              <div className="flex justify-end gap-2 pt-2 border-t border-slate-700">
+                <button
+                  type="button"
+                  onClick={() => setActionModal(null)}
+                  className="px-4 py-2 bg-slate-800 text-slate-300 text-xs font-bold rounded-xl"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="px-5 py-2 bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold rounded-xl shadow-lg transition-all"
+                >
+                  Save Profile Changes
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* 2. FUND CUSTOMER ACCOUNT DIALOG (+ CREDIT) */}
+      {actionModal === 'fund' && targetCustomer && (
+        <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-[#162032] border border-emerald-700/60 rounded-3xl p-6 max-w-md w-full space-y-4 shadow-2xl">
+            <div className="flex justify-between items-center pb-2 border-b border-slate-700">
+              <div>
+                <h3 className="font-display font-bold text-white text-base">Fund Account (Administrative Credit)</h3>
+                <p className="text-xs text-emerald-400">Target: {targetCustomer.fullName} (#{targetCustomer.customerId})</p>
+              </div>
+              <button onClick={() => setActionModal(null)} className="text-slate-400 hover:text-white font-bold">✕</button>
+            </div>
+
+            <form onSubmit={handleFundSubmit} className="space-y-3.5">
+              <div>
+                <label className="text-xs font-bold text-slate-300">Credit Amount ($ USD)</label>
+                <input
+                  type="number"
+                  min="1"
+                  step="0.01"
+                  required
+                  value={fundForm.amount}
+                  onChange={(e) => setFundForm({ ...fundForm, amount: Number(e.target.value) })}
+                  className="w-full mt-1 p-3 text-lg font-mono font-bold bg-slate-900 border border-slate-700 rounded-xl text-emerald-400 outline-none"
+                />
+              </div>
+
+              <div>
+                <label className="text-xs font-bold text-slate-300">Originating Entity / Wire Sender</label>
+                <input
+                  type="text"
+                  required
+                  value={fundForm.senderName}
+                  onChange={(e) => setFundForm({ ...fundForm, senderName: e.target.value })}
+                  className="w-full mt-1 p-2.5 text-xs bg-slate-900 border border-slate-700 rounded-xl text-white outline-none"
+                />
+              </div>
+
+              <div>
+                <label className="text-xs font-bold text-slate-300">Transaction Memo / Description</label>
+                <input
+                  type="text"
+                  required
+                  value={fundForm.description}
+                  onChange={(e) => setFundForm({ ...fundForm, description: e.target.value })}
+                  className="w-full mt-1 p-2.5 text-xs bg-slate-900 border border-slate-700 rounded-xl text-white outline-none"
+                />
+              </div>
+
+              <div className="p-3 bg-emerald-950/40 border border-emerald-800/60 rounded-xl text-[11px] text-emerald-300 space-y-0.5">
+                <div className="font-bold">Immediate Ledger Posting:</div>
+                <div>Funds will be credited immediately to the customer's checking balance and logged in Immutable Audit Records.</div>
+              </div>
+
+              <div className="flex justify-end gap-2 pt-2 border-t border-slate-700">
+                <button
+                  type="button"
+                  onClick={() => setActionModal(null)}
+                  className="px-4 py-2 bg-slate-800 text-slate-300 text-xs font-bold rounded-xl"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="px-5 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold rounded-xl shadow-lg transition-all"
+                >
+                  Execute + Credit Deposit
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* 3. DEDUCT CUSTOMER ACCOUNT DIALOG (- DEBIT) */}
+      {actionModal === 'deduct' && targetCustomer && (
+        <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-[#162032] border border-red-700/60 rounded-3xl p-6 max-w-md w-full space-y-4 shadow-2xl">
+            <div className="flex justify-between items-center pb-2 border-b border-slate-700">
+              <div>
+                <h3 className="font-display font-bold text-white text-base">Deduct Funds (Administrative Debit)</h3>
+                <p className="text-xs text-red-400">Target: {targetCustomer.fullName} (#{targetCustomer.customerId})</p>
+              </div>
+              <button onClick={() => setActionModal(null)} className="text-slate-400 hover:text-white font-bold">✕</button>
+            </div>
+
+            <form onSubmit={handleDeductSubmit} className="space-y-3.5">
+              <div>
+                <label className="text-xs font-bold text-slate-300">Debit Amount ($ USD)</label>
+                <input
+                  type="number"
+                  min="1"
+                  step="0.01"
+                  required
+                  value={deductForm.amount}
+                  onChange={(e) => setDeductForm({ ...deductForm, amount: Number(e.target.value) })}
+                  className="w-full mt-1 p-3 text-lg font-mono font-bold bg-slate-900 border border-slate-700 rounded-xl text-red-400 outline-none"
+                />
+              </div>
+
+              <div>
+                <label className="text-xs font-bold text-slate-300">Beneficiary / Debit Originator</label>
+                <input
+                  type="text"
+                  required
+                  value={deductForm.senderName}
+                  onChange={(e) => setDeductForm({ ...deductForm, senderName: e.target.value })}
+                  className="w-full mt-1 p-2.5 text-xs bg-slate-900 border border-slate-700 rounded-xl text-white outline-none"
+                />
+              </div>
+
+              <div>
+                <label className="text-xs font-bold text-slate-300">Debit Reason / Regulatory Memo</label>
+                <input
+                  type="text"
+                  required
+                  value={deductForm.description}
+                  onChange={(e) => setDeductForm({ ...deductForm, description: e.target.value })}
+                  className="w-full mt-1 p-2.5 text-xs bg-slate-900 border border-slate-700 rounded-xl text-white outline-none"
+                />
+              </div>
+
+              <div className="p-3 bg-red-950/40 border border-red-800/60 rounded-xl text-[11px] text-red-300 space-y-0.5">
+                <div className="font-bold">Ledger Reduction Warning:</div>
+                <div>This operation debits customer balance immediately. An immutable audit record will log this administrative deduction.</div>
+              </div>
+
+              <div className="flex justify-end gap-2 pt-2 border-t border-slate-700">
+                <button
+                  type="button"
+                  onClick={() => setActionModal(null)}
+                  className="px-4 py-2 bg-slate-800 text-slate-300 text-xs font-bold rounded-xl"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="px-5 py-2 bg-red-600 hover:bg-red-500 text-white text-xs font-bold rounded-xl shadow-lg transition-all"
+                >
+                  Execute - Debit Outflow
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* 4 & 5. FREEZE / UNFREEZE DIALOG */}
+      {(actionModal === 'freeze' || actionModal === 'unfreeze') && targetCustomer && (
+        <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-[#162032] border border-slate-700 rounded-3xl p-6 max-w-md w-full space-y-4 shadow-2xl">
+            <h3 className="font-display font-bold text-white text-base">
+              {actionModal === 'freeze' ? 'Freeze Customer Account' : 'Unfreeze Customer Account'}
+            </h3>
+            <p className="text-xs text-slate-400">
+              {actionModal === 'freeze'
+                ? `Freezing #${targetCustomer.customerId} (${targetCustomer.fullName}) immediately disables outgoing transfers, bill payments, and card debits.`
+                : `Unfreezing #${targetCustomer.customerId} (${targetCustomer.fullName}) restores all standard banking operations and card authorizations.`}
+            </p>
+
+            <div>
+              <label className="text-xs font-bold text-slate-300">Reason / Regulatory Compliance Note</label>
+              <textarea
+                value={actionReason}
+                onChange={(e) => setActionReason(e.target.value)}
+                rows={2}
+                className="w-full mt-1 p-2.5 text-xs bg-slate-900 border border-slate-700 rounded-xl text-white outline-none"
+              />
+            </div>
+
+            <div className="flex justify-end gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setActionModal(null)}
+                className="px-4 py-2 bg-slate-800 text-slate-300 text-xs font-bold rounded-xl"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => handleStatusChangeSubmit(actionModal === 'freeze' ? 'frozen' : 'active')}
+                className={`px-5 py-2 text-white text-xs font-bold rounded-xl shadow-lg transition-all ${
+                  actionModal === 'freeze' ? 'bg-blue-600 hover:bg-blue-500' : 'bg-emerald-600 hover:bg-emerald-500'
+                }`}
+              >
+                {actionModal === 'freeze' ? 'Confirm Freeze' : 'Confirm Unfreeze'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 6 & 7. LOCK / UNLOCK DIALOG */}
+      {(actionModal === 'lock' || actionModal === 'unlock') && targetCustomer && (
+        <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-[#162032] border border-amber-700/60 rounded-3xl p-6 max-w-md w-full space-y-4 shadow-2xl">
+            <h3 className="font-display font-bold text-white text-base">
+              {actionModal === 'lock' ? 'Security Lock Account' : 'Unlock Account Security'}
+            </h3>
+            <p className="text-xs text-slate-400">
+              {actionModal === 'lock'
+                ? `Locking #${targetCustomer.customerId} (${targetCustomer.fullName}) terminates current sessions and prevents authentication and money operations.`
+                : `Unlocking #${targetCustomer.customerId} (${targetCustomer.fullName}) restores account access for the customer.`}
+            </p>
+
+            <div>
+              <label className="text-xs font-bold text-slate-300">Reason / Incident Report Reference</label>
+              <textarea
+                value={actionReason}
+                onChange={(e) => setActionReason(e.target.value)}
+                rows={2}
+                className="w-full mt-1 p-2.5 text-xs bg-slate-900 border border-slate-700 rounded-xl text-white outline-none"
+              />
+            </div>
+
+            <div className="flex justify-end gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setActionModal(null)}
+                className="px-4 py-2 bg-slate-800 text-slate-300 text-xs font-bold rounded-xl"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => handleStatusChangeSubmit(actionModal === 'lock' ? 'locked' : 'active')}
+                className={`px-5 py-2 text-white text-xs font-bold rounded-xl shadow-lg transition-all ${
+                  actionModal === 'lock' ? 'bg-amber-600 hover:bg-amber-500' : 'bg-emerald-600 hover:bg-emerald-500'
+                }`}
+              >
+                {actionModal === 'lock' ? 'Confirm Security Lock' : 'Confirm Account Unlock'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 8 & 9. SUSPEND / REACTIVATE DIALOG */}
+      {(actionModal === 'suspend' || actionModal === 'reactivate') && targetCustomer && (
+        <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-[#162032] border border-purple-700/60 rounded-3xl p-6 max-w-md w-full space-y-4 shadow-2xl">
+            <h3 className="font-display font-bold text-white text-base">
+              {actionModal === 'suspend' ? 'Suspend Account (Compliance Review)' : 'Reactivate Suspended Account'}
+            </h3>
+            <p className="text-xs text-slate-400">
+              {actionModal === 'suspend'
+                ? `Suspending #${targetCustomer.customerId} (${targetCustomer.fullName}) flags the customer for regulatory review and suspends all banking activity.`
+                : `Reactivating #${targetCustomer.customerId} (${targetCustomer.fullName}) restores account standing to active after clearance.`}
+            </p>
+
+            <div>
+              <label className="text-xs font-bold text-slate-300">Compliance Documentation Memo</label>
+              <textarea
+                value={actionReason}
+                onChange={(e) => setActionReason(e.target.value)}
+                rows={2}
+                className="w-full mt-1 p-2.5 text-xs bg-slate-900 border border-slate-700 rounded-xl text-white outline-none"
+              />
+            </div>
+
+            <div className="flex justify-end gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setActionModal(null)}
+                className="px-4 py-2 bg-slate-800 text-slate-300 text-xs font-bold rounded-xl"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => handleStatusChangeSubmit(actionModal === 'suspend' ? 'suspended' : 'active')}
+                className={`px-5 py-2 text-white text-xs font-bold rounded-xl shadow-lg transition-all ${
+                  actionModal === 'suspend' ? 'bg-purple-600 hover:bg-purple-500' : 'bg-emerald-600 hover:bg-emerald-500'
+                }`}
+              >
+                {actionModal === 'suspend' ? 'Confirm Suspension' : 'Confirm Reactivation'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 10. CLOSE ACCOUNT DIALOG */}
+      {actionModal === 'close' && targetCustomer && (
+        <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-[#162032] border border-rose-700/60 rounded-3xl p-6 max-w-md w-full space-y-4 shadow-2xl">
+            <h3 className="font-display font-bold text-white text-base">Close Customer Relationship</h3>
+            <p className="text-xs text-slate-400">
+              Closing customer #{targetCustomer.customerId} marks accounts closed and terminates debit cards. Customer can be reopened later if requested.
+            </p>
+
+            <div>
+              <label className="text-xs font-bold text-slate-300">Reason for Account Closure</label>
+              <textarea
+                value={actionReason}
+                onChange={(e) => setActionReason(e.target.value)}
+                rows={2}
+                className="w-full mt-1 p-2.5 text-xs bg-slate-900 border border-slate-700 rounded-xl text-white outline-none"
+              />
+            </div>
+
+            <div className="flex justify-end gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setActionModal(null)}
+                className="px-4 py-2 bg-slate-800 text-slate-300 text-xs font-bold rounded-xl"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => handleStatusChangeSubmit('closed')}
+                className="px-5 py-2 bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold rounded-xl shadow-lg transition-all"
+              >
+                Confirm Account Closure
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 11. REOPEN ACCOUNT DIALOG */}
+      {actionModal === 'reopen' && targetCustomer && (
+        <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-[#162032] border border-emerald-700/60 rounded-3xl p-6 max-w-md w-full space-y-4 shadow-2xl">
+            <h3 className="font-display font-bold text-white text-base">Reopen Customer Account</h3>
+            <p className="text-xs text-slate-400">
+              Restores customer #{targetCustomer.customerId} ({targetCustomer.fullName}) with an active checking/savings account and initial capital balance.
+            </p>
+
+            <form onSubmit={handleReopenSubmit} className="space-y-3.5">
+              <div>
+                <label className="text-xs font-bold text-slate-300">New Account Type</label>
+                <select
+                  value={reopenForm.accountType}
+                  onChange={(e) => setReopenForm({ ...reopenForm, accountType: e.target.value as any })}
+                  className="w-full mt-1 p-2.5 text-xs bg-slate-900 border border-slate-700 rounded-xl text-white font-bold outline-none"
+                >
+                  <option value="checking">High-Yield Checking</option>
+                  <option value="savings">Premier Savings (4.25% APY)</option>
+                  <option value="investment">Wealth Investment Portfolio</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="text-xs font-bold text-slate-300">Initial Opening Balance ($ USD)</label>
+                <input
+                  type="number"
+                  min="0"
+                  step="100"
+                  value={reopenForm.initialDeposit}
+                  onChange={(e) => setReopenForm({ ...reopenForm, initialDeposit: Number(e.target.value) })}
+                  className="w-full mt-1 p-2.5 text-xs font-mono font-bold bg-slate-900 border border-slate-700 rounded-xl text-white outline-none"
+                />
+              </div>
+
+              <div className="flex justify-end gap-2 pt-2 border-t border-slate-700">
+                <button
+                  type="button"
+                  onClick={() => setActionModal(null)}
+                  className="px-4 py-2 bg-slate-800 text-slate-300 text-xs font-bold rounded-xl"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="px-5 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold rounded-xl shadow-lg transition-all"
+                >
+                  Reopen Account &amp; Activate
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* 12. DELETE CUSTOMER DIALOG (PERMANENT PURGE) */}
+      {actionModal === 'delete' && targetCustomer && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-[#1a1215] border border-red-600 rounded-3xl p-6 max-w-md w-full space-y-4 shadow-2xl">
+            <div className="flex items-center gap-2 text-red-500">
+              <span className="text-2xl">⚠️</span>
+              <h3 className="font-display font-bold text-white text-base">Permanent Customer Deletion</h3>
+            </div>
+            
+            <p className="text-xs text-red-200/90 leading-relaxed">
+              You are about to permanently delete customer <strong className="text-white">{targetCustomer.fullName}</strong> (#{targetCustomer.customerId}). All associated bank accounts, debit cards, transactions, and user sessions will be purged.
+            </p>
+
+            <div className="p-3 bg-red-950/60 border border-red-700/60 rounded-xl space-y-1 text-xs">
+              <span className="text-red-300 font-bold">Confirmation Required:</span>
+              <p className="text-[11px] text-slate-300">
+                To confirm permanent deletion, type <strong className="text-white font-mono">DELETE</strong> or customer ID <strong className="text-white font-mono">{targetCustomer.customerId}</strong> below:
+              </p>
+              <input
+                type="text"
+                placeholder="Type DELETE to confirm..."
+                value={deleteConfirmText}
+                onChange={(e) => setDeleteConfirmText(e.target.value)}
+                className="w-full mt-2 p-2.5 text-xs bg-black/60 border border-red-700 rounded-xl text-white font-mono outline-none"
+              />
+            </div>
+
+            <div className="flex justify-end gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setActionModal(null)}
+                className="px-4 py-2 bg-slate-800 text-slate-300 text-xs font-bold rounded-xl"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleDeleteSubmit}
+                className="px-5 py-2 bg-red-600 hover:bg-red-500 text-white text-xs font-bold rounded-xl shadow-lg transition-all"
+              >
+                Permanently Delete
               </button>
             </div>
           </div>

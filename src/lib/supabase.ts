@@ -18,14 +18,24 @@ import {
 } from '../types';
 
 const metaEnv = (import.meta as any).env || {};
-const supabaseUrl = metaEnv.VITE_SUPABASE_URL || 'https://placeholder.supabase.co';
-const supabaseAnonKey = metaEnv.VITE_SUPABASE_ANON_KEY || 'placeholder-anon-key';
+export const SUPABASE_URL =
+  metaEnv.VITE_SUPABASE_URL ||
+  metaEnv.NEXT_PUBLIC_SUPABASE_URL ||
+  'https://ucyglwcuuabobeeomfde.supabase.co';
+
+export const SUPABASE_ANON_KEY =
+  metaEnv.VITE_SUPABASE_ANON_KEY ||
+  metaEnv.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ||
+  'sb_publishable_8HK6rNTnqarhLuxVkzU5bA_-o-dZNDj';
 
 export const isSupabaseConfigured = Boolean(
-  metaEnv.VITE_SUPABASE_URL && metaEnv.VITE_SUPABASE_ANON_KEY
+  SUPABASE_URL &&
+  SUPABASE_ANON_KEY &&
+  !SUPABASE_URL.includes('placeholder') &&
+  !SUPABASE_ANON_KEY.includes('placeholder')
 );
 
-export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
+export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
   auth: {
     persistSession: true,
     autoRefreshToken: true,
@@ -33,7 +43,7 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
 });
 
 /**
- * Database schema TypeScript definitions for Supabase tables
+ * Complete PostgreSQL Database Schema TypeScript Definitions for Supabase
  */
 export interface DatabaseSchema {
   profiles: Profile;
@@ -52,6 +62,47 @@ export interface DatabaseSchema {
   announcements: Announcement;
   email_logs: EmailLog;
 }
+
+/**
+ * Supabase Data Access Helper for Greendot Bank
+ */
+export const supabaseDb = {
+  async getTable<T>(tableName: keyof DatabaseSchema): Promise<T[]> {
+    if (!isSupabaseConfigured) return [];
+    try {
+      const { data, error } = await supabase.from(tableName as string).select('*');
+      if (error) throw error;
+      return (data as T[]) || [];
+    } catch (err) {
+      console.error(`Error fetching table ${tableName} from Supabase:`, err);
+      return [];
+    }
+  },
+
+  async upsertRecord<T>(tableName: keyof DatabaseSchema, record: Partial<T>): Promise<boolean> {
+    if (!isSupabaseConfigured) return false;
+    try {
+      const { error } = await supabase.from(tableName as string).upsert(record as any);
+      if (error) throw error;
+      return true;
+    } catch (err) {
+      console.error(`Error upserting into ${tableName}:`, err);
+      return false;
+    }
+  },
+
+  async deleteRecord(tableName: keyof DatabaseSchema, idColumn: string, idValue: string): Promise<boolean> {
+    if (!isSupabaseConfigured) return false;
+    try {
+      const { error } = await supabase.from(tableName as string).delete().eq(idColumn, idValue);
+      if (error) throw error;
+      return true;
+    } catch (err) {
+      console.error(`Error deleting from ${tableName}:`, err);
+      return false;
+    }
+  }
+};
 
 /**
  * Helper to fetch or synchronize current session user from Supabase auth or fallback state

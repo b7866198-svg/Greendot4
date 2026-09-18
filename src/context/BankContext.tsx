@@ -7,6 +7,11 @@ import {
   INITIAL_STATE,
 } from '../lib/store';
 import {
+  supabase,
+  isSupabaseConfigured,
+  supabaseDb,
+} from '../lib/supabase';
+import {
   Profile,
   Account,
   Transaction,
@@ -131,6 +136,66 @@ export const BankProvider: React.FC<{ children: React.ReactNode }> = ({ children
   useEffect(() => {
     saveState(state);
   }, [state]);
+
+  // Synchronize Supabase Auth session & Database Tables if configured
+  useEffect(() => {
+    if (isSupabaseConfigured) {
+      // 1. Hydrate tables from Supabase PostgreSQL
+      Promise.all([
+        supabaseDb.getTable<Profile>('profiles'),
+        supabaseDb.getTable<Account>('accounts'),
+        supabaseDb.getTable<DebitCard>('debit_cards'),
+        supabaseDb.getTable<Transaction>('transactions'),
+        supabaseDb.getTable<Transfer>('transfers'),
+        supabaseDb.getTable<Loan>('loans'),
+        supabaseDb.getTable<AuditLog>('audit_logs'),
+        supabaseDb.getTable<Announcement>('announcements'),
+      ])
+        .then(([dbProfiles, dbAccounts, dbCards, dbTxns, dbTransfers, dbLoans, dbAudits, dbAnnouncements]) => {
+          if (dbProfiles && dbProfiles.length > 0) {
+            setState((prev) => ({
+              ...prev,
+              profiles: dbProfiles.length ? dbProfiles : prev.profiles,
+              accounts: dbAccounts && dbAccounts.length ? dbAccounts : prev.accounts,
+              debitCards: dbCards && dbCards.length ? dbCards : prev.debitCards,
+              transactions: dbTxns && dbTxns.length ? dbTxns : prev.transactions,
+              transfers: dbTransfers && dbTransfers.length ? dbTransfers : prev.transfers,
+              loans: dbLoans && dbLoans.length ? dbLoans : prev.loans,
+              auditLogs: dbAudits && dbAudits.length ? dbAudits : prev.auditLogs,
+              announcements: dbAnnouncements && dbAnnouncements.length ? dbAnnouncements : prev.announcements,
+            }));
+          }
+        })
+        .catch((err) => console.warn('Supabase database sync note:', err));
+
+      // 2. Hydrate Auth session
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (session?.user?.email) {
+          const userEmail = session.user.email.toLowerCase();
+          const matched = state.profiles.find((p) => p.email.toLowerCase() === userEmail);
+          if (matched && state.currentUserId !== matched.userId) {
+            setState((prev) => ({ ...prev, currentUserId: matched.userId }));
+          }
+        }
+      }).catch((err) => console.warn('Supabase session load error:', err));
+
+      const { data: authListener } = supabase.auth.onAuthStateChange((event, session) => {
+        if (session?.user?.email) {
+          const userEmail = session.user.email.toLowerCase();
+          const matched = state.profiles.find((p) => p.email.toLowerCase() === userEmail);
+          if (matched) {
+            setState((prev) => ({ ...prev, currentUserId: matched.userId }));
+          }
+        } else if (event === 'SIGNED_OUT') {
+          setState((prev) => ({ ...prev, currentUserId: null }));
+        }
+      });
+
+      return () => {
+        authListener.subscription.unsubscribe();
+      };
+    }
+  }, []);
 
   const rawUser = state.profiles.find((p) => p.userId === state.currentUserId) || null;
 
@@ -258,11 +323,21 @@ export const BankProvider: React.FC<{ children: React.ReactNode }> = ({ children
       };
     }
 
+    // If Supabase is configured, trigger sign-in with password in parallel
+    if (isSupabaseConfigured && cleanPassword) {
+      supabase.auth
+        .signInWithPassword({ email: found.email, password: cleanPassword })
+        .catch((err) => console.warn('Supabase Auth error:', err.message));
+    }
+
     setState((prev) => ({ ...prev, currentUserId: found.userId }));
     return { success: true, message: 'Welcome back!', user: found };
   };
 
   const logout = () => {
+    if (isSupabaseConfigured) {
+      supabase.auth.signOut().catch((err) => console.warn('Supabase sign-out error:', err.message));
+    }
     setState((prev) => ({ ...prev, currentUserId: null }));
   };
 
@@ -453,6 +528,16 @@ export const BankProvider: React.FC<{ children: React.ReactNode }> = ({ children
       createdAt: now,
     };
 
+    if (isSupabaseConfigured) {
+      supabaseDb.upsertRecord('profiles', newProfile).catch(() => {});
+      supabaseDb.upsertRecord('accounts', newAccount).catch(() => {});
+      if (data.hasVisaCard) {
+        supabaseDb.upsertRecord('debit_cards', newDebitCard).catch(() => {});
+      }
+      supabaseDb.upsertRecord('email_logs', newEmailLog).catch(() => {});
+      supabaseDb.upsertRecord('audit_logs', audit).catch(() => {});
+    }
+
     setState((prev) => ({
       ...prev,
       profiles: [...prev.profiles, newProfile],
@@ -466,9 +551,30 @@ export const BankProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   const updateCustomer = (userId: string, partial: Partial<Profile>) => {
+    const customer = state.profiles.find((p) => p.userId === userId);
+    const now = new Date().toISOString();
+
+    const audit: AuditLog = {
+      id: 'audit-' + Date.now(),
+      adminName: currentUser?.fullName || 'Administrator',
+      adminId: currentUser?.userId,
+      action: 'CUSTOMER_PROFILE_UPDATED',
+      targetType: 'Profile',
+      targetId: userId,
+      targetName: customer?.fullName || userId,
+      details: partial,
+      createdAt: now,
+    };
+
+    if (isSupabaseConfigured) {
+      supabaseDb.upsertRecord('audit_logs', audit).catch(() => {});
+      supabaseDb.upsertRecord('profiles', { userId, ...partial }).catch(() => {});
+    }
+
     setState((prev) => ({
       ...prev,
-      profiles: prev.profiles.map((p) => (p.userId === userId ? { ...p, ...partial, updatedAt: new Date().toISOString() } : p)),
+      profiles: prev.profiles.map((p) => (p.userId === userId ? { ...p, ...partial, updatedAt: now } : p)),
+      auditLogs: [audit, ...prev.auditLogs],
     }));
   };
 
@@ -545,6 +651,14 @@ export const BankProvider: React.FC<{ children: React.ReactNode }> = ({ children
       details: { amount, senderName, description, newBalance },
       createdAt: now,
     };
+
+    if (isSupabaseConfigured) {
+      supabaseDb.upsertRecord('accounts', { id: accountId, balance: newBalance }).catch(() => {});
+      supabaseDb.upsertRecord('transactions', newTxn).catch(() => {});
+      supabaseDb.upsertRecord('notifications', notif).catch(() => {});
+      supabaseDb.upsertRecord('email_logs', emailLog).catch(() => {});
+      supabaseDb.upsertRecord('audit_logs', audit).catch(() => {});
+    }
 
     setState((prev) => ({
       ...prev,
@@ -630,6 +744,14 @@ export const BankProvider: React.FC<{ children: React.ReactNode }> = ({ children
       createdAt: now,
     };
 
+    if (isSupabaseConfigured) {
+      supabaseDb.upsertRecord('accounts', { id: accountId, balance: newBalance }).catch(() => {});
+      supabaseDb.upsertRecord('transactions', newTxn).catch(() => {});
+      supabaseDb.upsertRecord('notifications', notif).catch(() => {});
+      supabaseDb.upsertRecord('email_logs', emailLog).catch(() => {});
+      supabaseDb.upsertRecord('audit_logs', audit).catch(() => {});
+    }
+
     setState((prev) => ({
       ...prev,
       accounts: prev.accounts.map((a) => (a.id === accountId ? { ...a, balance: newBalance } : a)),
@@ -656,6 +778,11 @@ export const BankProvider: React.FC<{ children: React.ReactNode }> = ({ children
       reason,
       createdAt: now,
     };
+
+    if (isSupabaseConfigured) {
+      supabaseDb.upsertRecord('profiles', { id: userId, userId, status }).catch(() => {});
+      supabaseDb.upsertRecord('audit_logs', audit).catch(() => {});
+    }
 
     setState((prev) => ({
       ...prev,
@@ -842,12 +969,50 @@ export const BankProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const now = new Date().toISOString();
     const customer = state.profiles.find((p) => p.userId === trf.userId);
 
+    // Atomic internal recipient processing if recipient is an internal Greendot account
+    const recipientAccount = state.accounts.find(
+      (a) => a.accountNumber === trf.toAccountNumber
+    );
+
+    let recipientTxn: Transaction | null = null;
+    let recipientNotif: Notification | null = null;
+    let newRecipientBalance = 0;
+
+    if (recipientAccount) {
+      newRecipientBalance = recipientAccount.balance + trf.amount;
+      recipientTxn = {
+        id: 'txn-' + Date.now() + '-in',
+        accountId: recipientAccount.id,
+        userId: recipientAccount.userId,
+        type: 'transfer_in',
+        amount: trf.amount,
+        fee: 0,
+        description: `Transfer from ${customer?.fullName || 'Greendot Member'} (${trf.reference})`,
+        reference: trf.reference + '-IN',
+        senderName: customer?.fullName || 'Greendot Member',
+        balanceAfter: newRecipientBalance,
+        status: 'completed',
+        date: now,
+        createdAt: now,
+      };
+
+      recipientNotif = {
+        id: 'notif-' + Date.now() + '-in',
+        userId: recipientAccount.userId,
+        type: 'success',
+        title: 'Transfer Received',
+        message: `+$${trf.amount.toFixed(2)} received from ${customer?.fullName || 'Greendot Member'}.`,
+        isRead: false,
+        createdAt: now,
+      };
+    }
+
     const notif: Notification = {
       id: 'notif-' + Date.now(),
       userId: trf.userId,
       type: 'success',
-      title: 'Transfer Approved & Dispatched',
-      message: `Your transfer of $${trf.amount.toFixed(2)} to ${trf.toAccountName} has been cleared.`,
+      title: 'Transfer Approved & Cleared',
+      message: `Your transfer of $${trf.amount.toFixed(2)} to ${trf.toAccountName} has been approved and cleared.`,
       isRead: false,
       createdAt: now,
     };
@@ -860,15 +1025,40 @@ export const BankProvider: React.FC<{ children: React.ReactNode }> = ({ children
       targetType: 'Transfer',
       targetId: transferId,
       targetName: `${trf.toAccountName} ($${trf.amount})`,
-      details: { amount: trf.amount, reference: trf.reference },
+      details: {
+        amount: trf.amount,
+        reference: trf.reference,
+        internalRecipientCredited: !!recipientAccount,
+      },
       createdAt: now,
     };
 
+    if (isSupabaseConfigured) {
+      supabaseDb.upsertRecord('audit_logs', audit).catch(() => {});
+      supabaseDb.upsertRecord('transfers', { ...trf, status: 'approved', completedAt: now }).catch(() => {});
+      if (recipientAccount && recipientTxn) {
+        supabaseDb.upsertRecord('accounts', { id: recipientAccount.id, balance: newRecipientBalance }).catch(() => {});
+        supabaseDb.upsertRecord('transactions', recipientTxn).catch(() => {});
+      }
+    }
+
     setState((prev) => ({
       ...prev,
-      transfers: prev.transfers.map((t) => (t.id === transferId ? { ...t, status: 'approved', completedAt: now, approvedBy: currentUser?.fullName } : t)),
-      transactions: prev.transactions.map((tx) => (tx.reference === trf.reference ? { ...tx, status: 'completed' } : tx)),
-      notifications: [notif, ...prev.notifications],
+      transfers: prev.transfers.map((t) =>
+        t.id === transferId ? { ...t, status: 'approved', completedAt: now, approvedBy: currentUser?.fullName } : t
+      ),
+      accounts: recipientAccount
+        ? prev.accounts.map((a) => (a.id === recipientAccount.id ? { ...a, balance: newRecipientBalance } : a))
+        : prev.accounts,
+      transactions: [
+        ...(recipientTxn ? [recipientTxn] : []),
+        ...prev.transactions.map((tx) => (tx.reference === trf.reference ? { ...tx, status: 'completed' as const } : tx)),
+      ],
+      notifications: [
+        ...(recipientNotif ? [recipientNotif] : []),
+        notif,
+        ...prev.notifications,
+      ],
       auditLogs: [audit, ...prev.auditLogs],
     }));
   };
@@ -903,6 +1093,14 @@ export const BankProvider: React.FC<{ children: React.ReactNode }> = ({ children
       reason,
       createdAt: now,
     };
+
+    if (isSupabaseConfigured) {
+      supabaseDb.upsertRecord('audit_logs', audit).catch(() => {});
+      supabaseDb.upsertRecord('transfers', { ...trf, status: 'rejected', rejectionReason: reason }).catch(() => {});
+      if (sourceAccount) {
+        supabaseDb.upsertRecord('accounts', { id: sourceAccount.id, balance: restoredBalance }).catch(() => {});
+      }
+    }
 
     setState((prev) => ({
       ...prev,

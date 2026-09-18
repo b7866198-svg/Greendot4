@@ -144,7 +144,9 @@ const BankAppInner: React.FC = () => {
           {dashboardTab === 'overview' && (
             <DashboardOverview onTabChange={(t) => setDashboardTab(t)} />
           )}
-          {dashboardTab === 'transfer' && <CustomerTransfer />}
+          {dashboardTab === 'transfer' && (
+            <CustomerTransfer onTabChange={(t) => setDashboardTab(t)} />
+          )}
           {dashboardTab === 'deposit' && (
             <CustomerCheckDeposit onSuccessNavigate={() => setDashboardTab('transactions')} />
           )}

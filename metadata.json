@@ -1,5 +1,5 @@
 {
-  "name": " Greendot Bank 3",
+  "name": "Greendot Bank",
   "description": "Next-generation secure online banking platform with customer dashboard, transfers, debit cards, loans, and admin management portal.",
   "requestFramePermissions": [
     "camera",

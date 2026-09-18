@@ -64,8 +64,18 @@ export const CustomerRecharge: React.FC<{ onTabChange?: (tab: string) => void }>
   const operators = ['Verizon Wireless', 'AT&T Mobility', 'T-Mobile USA', 'Mint Mobile', 'Cricket'];
   const amounts = [15, 25, 50, 75, 100];
 
+  const isRestricted =
+    currentUser.status === 'frozen' || currentUser.status === 'locked' || currentUser.status === 'suspended';
+
   const handleInitiate = (e: React.FormEvent) => {
     e.preventDefault();
+    if (isRestricted) {
+      setFeedback({
+        text: `Account is currently ${currentUser.status}. Outgoing recharge services are restricted.`,
+        ok: false,
+      });
+      return;
+    }
     if (amount > currentUser.balance) {
       setFeedback({ text: 'Insufficient available funds.', ok: false });
       return;
