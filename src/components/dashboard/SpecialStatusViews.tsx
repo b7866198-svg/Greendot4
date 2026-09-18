@@ -176,6 +176,52 @@ export const HowToUpgradeView: React.FC<{ onTabChange?: (tab: string) => void }>
   const upgradeMin = currentUser?.upgradeMinLoad || 800;
   const isTier0 = currentUser?.accountTier === 'tier_0';
 
+  if (currentUser?.hasVisaCard === false) {
+    return (
+      <div className="space-y-8 max-w-4xl animate-fade-in">
+        {/* Amber Gradient Prerequisite Header */}
+        <div
+          className="rounded-3xl p-8 text-white relative overflow-hidden shadow-xl"
+          style={{
+            background: 'linear-gradient(135deg, #d97706 0%, #b45309 50%, #78350f 100%)',
+          }}
+        >
+          <div className="absolute top-0 right-0 w-64 h-64 bg-white/10 rounded-full blur-2xl pointer-events-none" />
+          <div className="relative z-10 space-y-3">
+            <span className="px-3 py-1 bg-white/20 text-amber-100 rounded-full text-[10px] font-bold uppercase tracking-wider">
+              Prerequisite Required
+            </span>
+            <h2 className="font-display text-2xl sm:text-3xl font-extrabold tracking-tight">
+              Link Your Greendot Gold Visa Card First
+            </h2>
+            <p className="text-xs sm:text-sm text-amber-100 max-w-xl">
+              Tier 1 upgrade and higher limits are available only after your Greendot Gold Visa Card has been acquired and settled.
+            </p>
+          </div>
+        </div>
+
+        <div className="bg-white rounded-3xl p-8 border border-slate-200 shadow-sm text-center space-y-6 max-w-xl mx-auto">
+          <div className="w-16 h-16 rounded-3xl bg-amber-100 text-amber-800 flex items-center justify-center mx-auto shadow-inner">
+            <CreditCard className="w-8 h-8" />
+          </div>
+          <div className="space-y-2">
+            <h3 className="font-display font-bold text-lg text-slate-900">Visa Card Not Yet Settled</h3>
+            <p className="text-xs text-slate-600 max-w-md mx-auto leading-relaxed">
+              Tier 1 restrictions and verification procedures will activate automatically once your Greendot Gold Visa Card is verified and linked to your profile.
+            </p>
+          </div>
+          <button
+            onClick={() => onTabChange?.('how-to-get-card')}
+            className="px-6 py-3.5 bg-amber-600 hover:bg-amber-500 text-white font-display font-bold text-xs rounded-xl shadow transition-all inline-flex items-center gap-2"
+          >
+            <span>Get &amp; Link Your Visa Card</span>
+            <ArrowRight className="w-4 h-4" />
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   const handleUpgradeConfirm = () => {
     setFeedback(null);
     const res = upgradeAccountToTier1();

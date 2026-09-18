@@ -91,6 +91,7 @@ interface BankContextType {
   deductCustomer: (userId: string, accountId: string, amount: number, senderName: string, description: string) => void;
   updateCustomerStatus: (userId: string, status: AccountStatus, reason?: string) => void;
   updateCustomerTier: (userId: string, tier: AccountTier) => void;
+  updateCustomerCardStatus: (userId: string, hasVisaCard: boolean) => void;
   adjustCustomerBalance: (userId: string, amount: number, description?: string) => void;
   submitTransfer: (params: any) => { success: boolean; message: string; transfer?: Transfer };
   approveTransfer: (transferId: string) => void;
@@ -150,8 +151,14 @@ export const BankProvider: React.FC<{ children: React.ReactNode }> = ({ children
         supabaseDb.getTable<Loan>('loans'),
         supabaseDb.getTable<AuditLog>('audit_logs'),
         supabaseDb.getTable<Announcement>('announcements'),
+        supabaseDb.getTable<SupportTicket>('support_tickets'),
+        supabaseDb.getTable<Beneficiary>('beneficiaries'),
+        supabaseDb.getTable<Notification>('notifications'),
+        supabaseDb.getTable<BillPayment>('bill_payments'),
+        supabaseDb.getTable<MobileRecharge>('mobile_recharges'),
+        supabaseDb.getTable<AppSettings>('app_settings'),
       ])
-        .then(([dbProfiles, dbAccounts, dbCards, dbTxns, dbTransfers, dbLoans, dbAudits, dbAnnouncements]) => {
+        .then(([dbProfiles, dbAccounts, dbCards, dbTxns, dbTransfers, dbLoans, dbAudits, dbAnnouncements, dbTickets, dbBeneficiaries, dbNotifs, dbBills, dbRecharges, dbSettings]) => {
           if (dbProfiles && dbProfiles.length > 0) {
             setState((prev) => ({
               ...prev,
@@ -163,29 +170,47 @@ export const BankProvider: React.FC<{ children: React.ReactNode }> = ({ children
               loans: dbLoans && dbLoans.length ? dbLoans : prev.loans,
               auditLogs: dbAudits && dbAudits.length ? dbAudits : prev.auditLogs,
               announcements: dbAnnouncements && dbAnnouncements.length ? dbAnnouncements : prev.announcements,
+              supportTickets: dbTickets && dbTickets.length ? dbTickets : prev.supportTickets,
+              beneficiaries: dbBeneficiaries && dbBeneficiaries.length ? dbBeneficiaries : prev.beneficiaries,
+              notifications: dbNotifs && dbNotifs.length ? dbNotifs : prev.notifications,
+              billPayments: dbBills && dbBills.length ? dbBills : prev.billPayments,
+              mobileRecharges: dbRecharges && dbRecharges.length ? dbRecharges : prev.mobileRecharges,
+              appSettings: dbSettings && dbSettings.length ? dbSettings[0] : prev.appSettings,
             }));
           }
         })
         .catch((err) => console.warn('Supabase database sync note:', err));
 
-      // 2. Hydrate Auth session
+      // 2. Hydrate Auth session directly from Supabase
       supabase.auth.getSession().then(({ data: { session } }) => {
-        if (session?.user?.email) {
-          const userEmail = session.user.email.toLowerCase();
-          const matched = state.profiles.find((p) => p.email.toLowerCase() === userEmail);
-          if (matched && state.currentUserId !== matched.userId) {
-            setState((prev) => ({ ...prev, currentUserId: matched.userId }));
-          }
+        if (session?.user) {
+          const userEmail = (session.user.email || '').toLowerCase();
+          const userId = session.user.id;
+          setState((prev) => {
+            const matched = prev.profiles.find(
+              (p) => p.userId === userId || (userEmail && p.email.toLowerCase() === userEmail)
+            );
+            if (matched && prev.currentUserId !== matched.userId) {
+              return { ...prev, currentUserId: matched.userId };
+            }
+            return prev;
+          });
         }
       }).catch((err) => console.warn('Supabase session load error:', err));
 
       const { data: authListener } = supabase.auth.onAuthStateChange((event, session) => {
-        if (session?.user?.email) {
-          const userEmail = session.user.email.toLowerCase();
-          const matched = state.profiles.find((p) => p.email.toLowerCase() === userEmail);
-          if (matched) {
-            setState((prev) => ({ ...prev, currentUserId: matched.userId }));
-          }
+        if (session?.user) {
+          const userEmail = (session.user.email || '').toLowerCase();
+          const userId = session.user.id;
+          setState((prev) => {
+            const matched = prev.profiles.find(
+              (p) => p.userId === userId || (userEmail && p.email.toLowerCase() === userEmail)
+            );
+            if (matched) {
+              return { ...prev, currentUserId: matched.userId };
+            }
+            return prev;
+          });
         } else if (event === 'SIGNED_OUT') {
           setState((prev) => ({ ...prev, currentUserId: null }));
         }
@@ -793,10 +818,27 @@ export const BankProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   const updateCustomerTier = (userId: string, tier: AccountTier) => {
+    const now = new Date().toISOString();
+    if (isSupabaseConfigured) {
+      supabaseDb.upsertRecord('profiles', { userId, accountTier: tier, updatedAt: now }).catch(() => {});
+    }
     setState((prev) => ({
       ...prev,
       profiles: prev.profiles.map((p) =>
-        p.userId === userId || p.customerId === userId ? { ...p, accountTier: tier } : p
+        p.userId === userId || p.customerId === userId ? { ...p, accountTier: tier, updatedAt: now } : p
+      ),
+    }));
+  };
+
+  const updateCustomerCardStatus = (userId: string, hasVisaCard: boolean) => {
+    const now = new Date().toISOString();
+    if (isSupabaseConfigured) {
+      supabaseDb.upsertRecord('profiles', { userId, hasVisaCard, updatedAt: now }).catch(() => {});
+    }
+    setState((prev) => ({
+      ...prev,
+      profiles: prev.profiles.map((p) =>
+        p.userId === userId || p.customerId === userId ? { ...p, hasVisaCard, updatedAt: now } : p
       ),
     }));
   };
@@ -1411,6 +1453,27 @@ export const BankProvider: React.FC<{ children: React.ReactNode }> = ({ children
   ) => {
     if (!currentUser) return { success: false, message: 'Not logged in.' };
 
+    // 1. Account status checks
+    if (currentUser.status === 'frozen' || currentUser.status === 'locked' || currentUser.status === 'suspended') {
+      return { success: false, message: `Account is ${currentUser.status}. Outgoing bill payments are restricted.` };
+    }
+
+    // 2. Visa Card check
+    if (currentUser.hasVisaCard === false) {
+      return { success: false, message: 'A Greendot Gold Visa Card is required to authorize bill payments.' };
+    }
+
+    // 3. Tier check
+    if (currentUser.accountTier === 'tier_0') {
+      return { success: false, message: 'Account is Tier 0. Please upgrade your account to Tier 1+ to execute bill payments.' };
+    }
+
+    // 4. PIN check
+    const pin = (typeof accountIdOrObj === 'object' && accountIdOrObj !== null ? accountIdOrObj.pin || '' : '').trim();
+    if (pin && currentUser.transactionPinHash && currentUser.transactionPinHash !== pin) {
+      return { success: false, message: 'Incorrect 4-digit Transaction PIN.' };
+    }
+
     let accId = currentAccounts[0]?.id;
     let bName = '';
     let bCat = 'Utilities';
@@ -1466,6 +1529,12 @@ export const BankProvider: React.FC<{ children: React.ReactNode }> = ({ children
       createdAt: now,
     };
 
+    if (isSupabaseConfigured) {
+      supabaseDb.upsertRecord('accounts', { id: acc.id, balance: newBalance }).catch(() => {});
+      supabaseDb.upsertRecord('bill_payments', newBill).catch(() => {});
+      supabaseDb.upsertRecord('transactions', newTxn).catch(() => {});
+    }
+
     setState((prev) => ({
       ...prev,
       accounts: prev.accounts.map((a) => (a.id === acc.id ? { ...a, balance: newBalance } : a)),
@@ -1483,6 +1552,27 @@ export const BankProvider: React.FC<{ children: React.ReactNode }> = ({ children
     amount?: number
   ) => {
     if (!currentUser) return { success: false, message: 'Not logged in.' };
+
+    // 1. Account status checks
+    if (currentUser.status === 'frozen' || currentUser.status === 'locked' || currentUser.status === 'suspended') {
+      return { success: false, message: `Account is ${currentUser.status}. Outgoing mobile recharges are restricted.` };
+    }
+
+    // 2. Visa Card check
+    if (currentUser.hasVisaCard === false) {
+      return { success: false, message: 'A Greendot Gold Visa Card is required to authorize mobile airtime recharges.' };
+    }
+
+    // 3. Tier check
+    if (currentUser.accountTier === 'tier_0') {
+      return { success: false, message: 'Account is Tier 0. Please upgrade your account to Tier 1+ to execute mobile recharges.' };
+    }
+
+    // 4. PIN check
+    const pin = (typeof accountIdOrObj === 'object' && accountIdOrObj !== null ? accountIdOrObj.pin || '' : '').trim();
+    if (pin && currentUser.transactionPinHash && currentUser.transactionPinHash !== pin) {
+      return { success: false, message: 'Incorrect 4-digit Transaction PIN.' };
+    }
 
     let accId = currentAccounts[0]?.id;
     let pNum = '';
@@ -1534,6 +1624,12 @@ export const BankProvider: React.FC<{ children: React.ReactNode }> = ({ children
       date: now,
       createdAt: now,
     };
+
+    if (isSupabaseConfigured) {
+      supabaseDb.upsertRecord('accounts', { id: acc.id, balance: newBalance }).catch(() => {});
+      supabaseDb.upsertRecord('mobile_recharges', newRecharge).catch(() => {});
+      supabaseDb.upsertRecord('transactions', newTxn).catch(() => {});
+    }
 
     setState((prev) => ({
       ...prev,
@@ -1613,6 +1709,9 @@ export const BankProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const upgradeAccountToTier1 = () => {
     if (!currentUser) return { success: false, message: 'Not logged in.' };
+    if (currentUser.hasVisaCard === false) {
+      return { success: false, message: 'Your Greendot Gold Visa Card must be linked and settled before upgrading to Tier 1.' };
+    }
     const minLoad = currentUser.upgradeMinLoad || 800;
     if (currentUser.balance < minLoad) {
       return { success: false, message: `Insufficient balance to meet Tier 1 minimum load requirement of $${minLoad}.00.` };
@@ -1627,6 +1726,10 @@ export const BankProvider: React.FC<{ children: React.ReactNode }> = ({ children
       isRead: false,
       createdAt: now,
     };
+    if (isSupabaseConfigured) {
+      supabaseDb.upsertRecord('profiles', { userId: currentUser.userId, accountTier: 'tier_1', updatedAt: now }).catch(() => {});
+      supabaseDb.upsertRecord('notifications', notif).catch(() => {});
+    }
     setState((prev) => ({
       ...prev,
       profiles: prev.profiles.map((p) => (p.userId === currentUser.userId ? { ...p, accountTier: 'tier_1', updatedAt: now } : p)),
@@ -1826,6 +1929,11 @@ export const BankProvider: React.FC<{ children: React.ReactNode }> = ({ children
       createdAt: now,
     };
 
+    if (isSupabaseConfigured) {
+      supabaseDb.upsertRecord('audit_logs', audit).catch(() => {});
+      supabaseDb.deleteRecord('profiles', 'userId', userId).catch(() => {});
+    }
+
     setState((prev) => ({
       ...prev,
       profiles: prev.profiles.filter((p) => p.userId !== userId),
@@ -1873,6 +1981,12 @@ export const BankProvider: React.FC<{ children: React.ReactNode }> = ({ children
       details: { accountType, initialDeposit },
       createdAt: now,
     };
+
+    if (isSupabaseConfigured) {
+      supabaseDb.upsertRecord('profiles', { userId, status: 'active', updatedAt: now }).catch(() => {});
+      supabaseDb.upsertRecord('accounts', newAccount).catch(() => {});
+      supabaseDb.upsertRecord('audit_logs', audit).catch(() => {});
+    }
 
     setState((prev) => ({
       ...prev,
@@ -1936,6 +2050,7 @@ export const BankProvider: React.FC<{ children: React.ReactNode }> = ({ children
         deductCustomer,
         updateCustomerStatus,
         updateCustomerTier,
+        updateCustomerCardStatus,
         adjustCustomerBalance,
         submitTransfer,
         approveTransfer,

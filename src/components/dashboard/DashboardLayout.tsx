@@ -83,8 +83,11 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({
         { id: 'profile', label: 'Profile Settings', icon: User },
         { id: 'security', label: 'Security & PIN', icon: ShieldCheck },
         { id: 'support', label: 'Help & Concierge', icon: HelpCircle },
-        { id: 'how-to-get-card', label: 'How to Get Card', icon: CreditCard },
-        { id: 'how-to-upgrade', label: 'How to Upgrade', icon: ArrowUpRight },
+        ...(currentUser?.hasVisaCard === false
+          ? [{ id: 'how-to-get-card', label: 'How to Get Card', icon: CreditCard }]
+          : currentUser?.accountTier === 'tier_0'
+          ? [{ id: 'how-to-upgrade', label: 'How to Upgrade', icon: ArrowUpRight }]
+          : []),
       ],
     },
   ];

@@ -61,6 +61,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({
     logout,
     updateCustomerStatus,
     updateCustomerTier,
+    updateCustomerCardStatus,
     adjustCustomerBalance,
     updateCustomer,
     fundCustomer,
@@ -1081,6 +1082,27 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({
                             {tr}
                           </button>
                         ))}
+                      </div>
+                    </div>
+
+                    <div className="space-y-2">
+                      <label className="text-xs font-bold text-slate-400">Greendot Gold Visa Card</label>
+                      <div>
+                        <button
+                          onClick={() => {
+                            const newStatus = !selectedCustomer.hasVisaCard;
+                            updateCustomerCardStatus(selectedCustomer.customerId, newStatus);
+                            setSelectedCustomer({ ...selectedCustomer, hasVisaCard: newStatus });
+                          }}
+                          className={`px-3 py-1.5 text-xs font-bold rounded-lg uppercase transition-all flex items-center gap-1.5 ${
+                            selectedCustomer.hasVisaCard
+                              ? 'bg-emerald-600 text-white shadow'
+                              : 'bg-amber-600/30 text-amber-300 border border-amber-500/40 hover:bg-amber-600/50'
+                          }`}
+                        >
+                          <CreditCard className="w-3.5 h-3.5" />
+                          <span>{selectedCustomer.hasVisaCard ? '✓ Card Settled & Linked' : '⏳ Card Not Linked'}</span>
+                        </button>
                       </div>
                     </div>
                   </div>
